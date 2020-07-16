@@ -48,6 +48,9 @@ def generate_grid_catalog(args: dict):
             noise = sim.noise_per_epoch[iband]
             if args.get('post_blend_noise'):
                 noise = np.sqrt(sim.noise_per_epoch[iband]**2 + args['post_blend_noise']**2)
+            if args.get('post_det_noise'):
+                noise = np.sqrt(sim.noise_per_epoch[iband]**2 + args['post_det_noise']**2)
+
             bounds = galsim.BoundsI(int(pos.x), int(
                 pos.x), int(pos.y), int(pos.y))
             bounds = bounds.withBorder(dg // 2)

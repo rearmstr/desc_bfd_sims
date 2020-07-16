@@ -3,6 +3,9 @@ import bfd
 
 import numpy as np
 import lsst.afw.table as afwTable
+import lsst.afw.image as afwImage
+import lsst.afw.detection as afwDet
+import lsst.afw.geom as afwGeom
 import lsst.geom as geom
 import lsst.daf.base as dafBase
 import lsst.desc.bfd as dbfd
@@ -66,18 +69,23 @@ def generate_blend_catalog(args: dict):
 
     deblend_config = SourceDeblendConfig()
     deblend_task = SourceDeblendTask(config=deblend_config, schema=schema)
-
+    orig_noise_sigma = np.sqrt(1./result[ref_band][0].weight[0, 0])
     # Detect objects
     if args.get('pre_det_noise'):
         original_pixels = exp.image.array.copy()
         new_pixels = exp.image.array
-        new_pixels.array[:] += np.random.normal(size=exp.image[bbox].array.shape)*args['pre_det_noise']
+        new_pixels.array[:] += np.random.normal(size=exp.image.array.shape)*args['pre_det_noise']
 
     table = afwTable.SourceTable.make(schema)
     det_result = detection_task.run(table, exp)
 
     if args.get('pre_det_noise'):
-        new_pixels = exp.image.array = original_pixels
+        new_pixels = original_pixels
+
+    if args.get('post_det_noise'):
+        exp.image.array[:] += np.random.normal(size=exp.image.array.shape)*args['post_det_noise']
+        noise_sigma = np.sqrt(orig_noise_sigma**2 + args['post_det_noise']**2)
+        exp.variance.array[:] = noise_sigma**2
 
     deblend_task.run(exp, det_result.sources)
 
@@ -96,7 +104,7 @@ def generate_blend_catalog(args: dict):
     ref_band = 'i'
     ref_wcs = result[ref_band][0].wcs
 
-    orig_noise_sigma = np.sqrt(1./result[ref_band][0].weight[0, 0])
+
     for src in sources:
         meas_task.callMeasure(src, exp)
 
@@ -245,32 +253,38 @@ def generate_blend_prior(args: dict):
     table = afwTable.SourceTable.make(schema)
     det_result = detection_task.run(table, exp)
     
-    # import pdb;pdb.set_trace()
-    # if args.get('add_prior_noise_det'):
-    #     add_noise = np.sqrt(noise_sigma**2 + args['prior_noise']**2)
-    #     exp_noise = exp.copy(deep=True)
-    #     exp_noise.image.array += np.random.normal(shape=exp_noise.image.array.shape)*add_noise_sigma
+    if args.get('add_prior_noise_det'):
+        add_noise = np.sqrt(noise_sigma**2 + args['prior_noise']**2)
+        exp_noise = afwImage.ExposureF(exp,deep=True)
+        exp_noise.image.array += np.random.normal(size=exp_noise.image.array.shape)*add_noise
 
-    #     det_noise_result = detection_task.run(table, exp_noise)
-    #     # match the two catalogs and add additional peaks not detected in low noise image
-    #      d_pos = set([(a.get('f_x'),a.get('f_y')) for ss in det_result.sources for a in ss.getFootprint().getPeaks()])
+        det_noise_result = detection_task.run(table, exp_noise)
 
-    #      for det in det_noise_result.sources:
-    #         rec = det_noise_result.sources.addNew()
-    #         bbox = det.getFootprint().getBBox()
-    #         footprint = afwDet.Footprint(afwGeom.SpanSet(bbox), bbox)
-    #         for peak in det.getFootprint().getPeaks():
-    #             if (peak.get('f_x'), peak.get('f_y')) not in d_pos:
-    #                  footprint.addPeak(p[0]+0.5, p[1]+0.5, 100)
+        for det in det_noise_result.sources:
+            
+            bbox = det.getFootprint().getBBox()
+            
+            for peak in det.getFootprint().getPeaks():
+                px = peak.get('f_x')
+                py = peak.get('f_y')
+                for deep_det in det_result.sources:
+                    deep_foot = deep_det.getFootprint()
+                    if deep_foot.getBBox().contains(geom.Point2I(px,py)):
+                        min_dist = 0
+                        for deep_peak in deep_foot.getPeaks():
+                            dpx = peak.get('f_x')
+                            dpy = peak.get('f_y')
+                            dist = np.sqrt((dpx-px)**2 + (dpy-py)**2)
+                            if dist < min_dist:
+                                min_dist = dist
+                        if min_dist > 3:
+                            deep_foot.addPeak(px, py, exp_noise.image.array[int(py), int(px)])
+                    else:
+                        rec = det_result.sources.addNew()
+                        footprint = afwDet.Footprint(afwGeom.SpanSet(bbox), bbox)
+                        footprint.addPeak(px, py, exp_noise.image.array[int(py), int(px)])            
+                        rec.setFootprint(footprint)
 
-
-    #      n_pos = set([(a.get('f_x'),a.get('f_y')) for ss in det_result.sources for a in ss.getFootprint().getPeaks()])
-    #      dy = [a.get('f_y') for ss in det_result.sources for a in ss.getFootprint().getPeaks()]
-    #      nx = [a.get('f_x') for ss in det_noise_result.sources for a in ss.getFootprint().getPeaks()]
-    #      ny = [a.get('f_y') for ss in det_noise_result.sources for a in ss.getFootprint().getPeaks()]
-
-
-    
     deblend_task.run(exp, det_result.sources)
     # Run on deblended images
     noise_replacer_config = NoiseReplacerConfig()
