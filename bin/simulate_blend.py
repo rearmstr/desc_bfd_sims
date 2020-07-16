@@ -80,7 +80,9 @@ if os.path.exists(data['outdir']) is False:
     os.makedirs(data['outdir'])
 
 prior_threads = min(data['n_threads'], data['njobs_prior'])
-prior_pool = multiprocessing.Pool(processes=prior_threads)
+if prior_threads > 1:
+    prior_pool = multiprocessing.Pool(processes=prior_threads)
+
 prior_list_args = []
 if data['run_prior']:
     for i in range(data['njobs_prior']):
@@ -131,14 +133,19 @@ if data['run_prior']:
         prior_args['write_prior_file'] = f"{prior_args['outdir']}/{prior_args['priorfile']}_{prior_args['index']}.fits"
         prior_list_args.append(prior_args)
 
-prior_results = prior_pool.map(generate_blend_prior_write, prior_list_args)
+if prior_threads > 1:
+    prior_results = prior_pool.map(generate_blend_prior_write, prior_list_args)
+else:
+    for arg in prior_list_args:
+        generate_blend_prior_write(arg)
 
 # List of processed files to pass on to the pqr function
 cat_files = []
 
 all_args = []
 function = None
-pool = multiprocessing.Pool(processes=data['n_threads'])
+if data['n_threads'] > 1:
+    pool = multiprocessing.Pool(processes=data['n_threads'])
 for i in range(data['njobs']):
 
     local_args = copy.deepcopy(data)
@@ -169,7 +176,11 @@ for i in range(data['njobs']):
         function = generate_blend_catalog_write
         all_args.append(local_args)
 
-results = pool.map(function, all_args)
+if data['n_threads'] > 1:
+    results = pool.map(function, all_args)
+else:
+    for arg in all_args:
+        function(arg)
 
 prior_match = f"{data['outdir']}/{data['priorfile']}_*"
 if data['run_pqr']:
