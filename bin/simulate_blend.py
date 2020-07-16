@@ -9,7 +9,9 @@ import copy
 
 import lsst.desc.bfd as dbfd
 import multiprocessing
-
+from scipy.spatial import cKDTree
+from astropy.table import Table
+from collections import defaultdict
 from bfd_desc_sims import (generate_pqr, generate_grid_catalog,
                            generate_grid_prior, generate_blend_prior,
                            generate_blend_catalog, read_prior)
@@ -28,6 +30,20 @@ def generate_blend_catalog_write(args: dict):
         for band,imlist in result.items():
             for ii,im in enumerate(imlist):
                 im.image.write(f"{args['outdir']}/image_{args['galfile']}_{args['index']}_{band}_{ii}.fits")
+    if args.get('write_truth'):
+
+        catalog = sim._object_data
+        data = defaultdict(list)
+        for obj in catalog:
+            for band in obj.keys():
+                data[f'{band}_x'].append(obj[band]['pos'][0].x)
+                data[f'{band}_y'].append(obj[band]['pos'][0].y)
+                data[f'{band}_flux'].append(obj[band]['obj'].flux)
+                data[f'{band}_radius'].append(obj[band]['obj'].scale_radius)
+
+        table = Table(data)
+        table.write(f"{args['outdir']}/truth_{args['galfile']}_{args['index']}.fits", overwrite=True)
+
 
 
 def generate_blend_prior_write(args: dict):
