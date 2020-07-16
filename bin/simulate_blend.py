@@ -101,7 +101,7 @@ if data['run_prior']:
             sims_dict['noise_per_band'] = cat_args['noise_sigma']
             cat_args['sim'] = sims_dict
 
-            if sims_dict['gals_type'] == 'wldeblend':
+            if 'gals_type' in sims_dict:
                 sims_dict['layout_type'] = 'random'
                 sim, result, cat = generate_blend_catalog(cat_args)
             else:
