@@ -134,7 +134,12 @@ def generate_blend_catalog(args: dict):
             noise_sigma = np.sqrt(orig_noise_sigma**2 + args['post_blend_noise']**2)
 
 
-        kgal = buildKGalaxyDM(exp, xy_pos, bbox, uv_pos, bfd_config, noise_sigma, weight, _id=src.getId())
+        try:
+            kgal = buildKGalaxyDM(exp, xy_pos, bbox, uv_pos, bfd_config, noise_sigma, weight, _id=src.getId())
+        except:
+            replacer.removeSource(src.getId())
+            print('problem buiding kgalaxy')
+            continue
 
         if args.get('post_blend_noise'):
             new_pixels.array[:] = original_pixels
@@ -326,8 +331,12 @@ def generate_blend_prior(args: dict):
         sky = exp.getWcs().pixelToSky(geom.Point2D(x_peak, y_peak))
         uv_pos = (sky.getRa().asArcseconds(), sky.getDec().asArcseconds())
         xy_pos = (x_peak, y_peak)
-
-        kgal = buildKGalaxyDM(exp, xy_pos, bbox, uv_pos, bfd_config, noise_sigma, weight, _id=src.getId())
+        try:
+            kgal = buildKGalaxyDM(exp, xy_pos, bbox, uv_pos, bfd_config, noise_sigma, weight, _id=src.getId())
+        except:
+            replacer.removeSource(src.getId())
+            print('Failed to build gal')
+            continue
 
         kc = dbfd.KColorGalaxy.KColorGalaxy(bfd_config, [kgal], nda=kgal.getNda())
         world = ref_wcs.toWorld(galsim.PositionD(x_peak, y_peak))
