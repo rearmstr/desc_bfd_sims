@@ -24,12 +24,13 @@ def generate_grid_catalog_write(args: dict):
 
 def generate_blend_catalog_write(args: dict):
     """Generate catalog and wrie out result.  This is useful in multiprocessing"""
-    sim, result, cat = generate_blend_catalog(args)
+    sim, result, cat, exp = generate_blend_catalog(args)
     cat.writeFits(f"{args['outdir']}/{args['galfile']}_{args['index']}.fits")
     if args.get('write_image'):
         for band,imlist in result.items():
             for ii,im in enumerate(imlist):
                 im.image.write(f"{args['outdir']}/image_{args['galfile']}_{args['index']}_{band}_{ii}.fits")
+                exp.writeFits(f"{args['outdir']}/exp_{args['galfile']}_{args['index']}_{band}_{ii}.fits")
     if args.get('write_truth'):
 
         catalog = sim._object_data

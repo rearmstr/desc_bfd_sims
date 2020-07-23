@@ -178,7 +178,7 @@ def generate_blend_catalog(args: dict):
         replacer.removeSource(src.getId())
 
     replacer.end()
-    return sim, result, cat
+    return sim, result, cat, exp
 
 
 def generate_blend_prior(args: dict):
