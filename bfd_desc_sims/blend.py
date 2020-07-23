@@ -74,7 +74,7 @@ def generate_blend_catalog(args: dict):
     if args.get('pre_det_noise'):
         original_pixels = exp.image.array.copy()
         new_pixels = exp.image.array
-        new_pixels.array[:] += np.random.normal(size=exp.image.array.shape)*args['pre_det_noise']
+        new_pixels[:] += np.random.normal(size=exp.image.array.shape)*args['pre_det_noise']
 
     table = afwTable.SourceTable.make(schema)
     det_result = detection_task.run(table, exp)
@@ -116,9 +116,12 @@ def generate_blend_catalog(args: dict):
         peak = src.getFootprint().getPeaks()[0]
         x_peak, y_peak = peak.getIx() - 0.5, peak.getIy() - 0.5
 
-        bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
-        bbox.grow(args['stamp_size'] // 2)
-        bbox.clip(exp.getBBox())
+        if args.get('use_footprint'):
+            bbox = src.getFootprint().getBBox()
+        else:
+            bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
+            bbox.grow(args['stamp_size'] // 2)
+            bbox.clip(exp.getBBox())
 
         sky = exp.getWcs().pixelToSky(geom.Point2D(x_peak, y_peak))
         uv_pos = (sky.getRa().asArcseconds(), sky.getDec().asArcseconds())
@@ -313,9 +316,12 @@ def generate_blend_prior(args: dict):
         peak = src.getFootprint().getPeaks()[0]
         x_peak, y_peak = peak.getIx() - 0.5, peak.getIy() - 0.5
 
-        bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
-        bbox.grow(args['stamp_size'] // 2)
-        bbox.clip(exp.getBBox())
+        if args.get('use_footprint'):
+            bbox = src.getFootprint().getBBox()
+        else:
+            bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
+            bbox.grow(args['stamp_size'] // 2)
+            bbox.clip(exp.getBBox())
 
         sky = exp.getWcs().pixelToSky(geom.Point2D(x_peak, y_peak))
         uv_pos = (sky.getRa().asArcseconds(), sky.getDec().asArcseconds())
