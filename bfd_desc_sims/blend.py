@@ -258,8 +258,18 @@ def generate_blend_prior(args: dict):
     deblend_task = SourceDeblendTask(config=deblend_config, schema=schema)
 
     # Detect objects
+    if args.get('prior_pre_det_noise'):
+        add_noise = np.sqrt(noise_sigma**2 + args['prior_pre_det_noise']**2)
+        print('Adding noise with sigma=', add_noise)
+        original_pixels = exp.image.array.copy()
+        new_pixels = exp.image.array
+        new_pixels[:] += np.random.normal(size=exp.image.array.shape)*add_noise
+
     table = afwTable.SourceTable.make(schema)
     det_result = detection_task.run(table, exp)
+
+    if args.get('prior_pre_det_noise'):
+        new_pixels = original_pixels
     
     if args.get('add_prior_noise_det'):
         add_noise = np.sqrt(noise_sigma**2 + args['prior_noise']**2)
