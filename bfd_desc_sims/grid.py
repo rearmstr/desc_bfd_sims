@@ -54,7 +54,7 @@ def generate_grid_catalog(args: dict):
             bounds = galsim.BoundsI(int(pos.x), int(
                 pos.x), int(pos.y), int(pos.y))
             bounds = bounds.withBorder(dg // 2)
-
+            bounds = bounds & image.bounds
             kgal = buildKGalaxy(weight, bfd_config, xy_pos,
                                 image, bounds, psf_image, noise, wcs, _id=i)
             kgals.append(kgal)
