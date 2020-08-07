@@ -364,7 +364,8 @@ def generate_pqr(args: dict,
     full_cov_odd = np.zeros((n_odd, n_odd), dtype=np.float32)
     full_cov_even[:, :] = np.nan
     full_cov_odd[:, :] = np.nan
-
+    if args.get('add_nblend_pqr'):
+        nblend = {}
     for irec, rec in enumerate(cat):
         if 'diff_covariance' in args:
             cov_even = rec.get('bfd_cov_even')
@@ -399,15 +400,19 @@ def generate_pqr(args: dict,
         tid = rec.get('id')
         tg = bfd_config.TargetGalaxy(moment, cov, pos, tid)
         tgs.append(tg)
+        if args.get('add_nblend_pqr'):
+            nblend[tid] = rec['nblend']
 
     results = prior.getPqrCatalog(tgs, args['n_threads'], args['n_chunk'])
     keys, schema = define_pqr_schema(bfd_config)
+    if args.get('add_nblend_pqr'):
+        keys['nblend'] = schema.addField('nblend', type=np.int32, doc="number of objects in blend")
 
     outcat = afwTable.BaseCatalog(schema)
     pqr_sum = bfd_config.Pqr()
     bad = 0
     nl_desel_pqr = bfd_config.Pqr(desel_pqr).neglog()
-    for r, tg in zip(results, tgs):
+    for ii,(r, tg) in enumerate(zip(results, tgs)):
         out = outcat.addNew()
         if np.isfinite(r[0]._pqr[0])==False or r[0]._pqr[0] <= 0:
             bad += 1
@@ -425,6 +430,13 @@ def generate_pqr(args: dict,
         out.set('coord_ra', tg.position[0]*geom.radians)
         out.set('coord_dec', tg.position[1]*geom.radians)
         pqr_sum += pqr
+
+        if args.get('add_nblend_pqr'):
+            try:
+                out.set(keys['nblend'], nblend[tg.id])
+            except:
+                pass
+            #    import pdb;pdb.set_trace()
 
     return outcat, pqr_sum
 

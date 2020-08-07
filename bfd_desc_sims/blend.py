@@ -29,6 +29,7 @@ def generate_blend_catalog(args: dict):
     weight = dbfd.KSigmaWeightF(args['weight_sigma'], args['weight_n'])
 
     keys, bfd_schema = define_cat_schema(bfd_config)
+    keys['nblend'] = bfd_schema.addField('nblend', type=np.int32, doc="number of objects in blend")
     cat = afwTable.SourceCatalog(bfd_schema)
 
     rng = np.random.RandomState(args['seed'])
@@ -104,6 +105,10 @@ def generate_blend_catalog(args: dict):
     ref_band = 'i'
     ref_wcs = result[ref_band][0].wcs
 
+    parent_dict = defaultdict(int)
+    for src in sources:
+        if src.getParent()!=0:
+            parent_dict[src.getParent()] += 1
 
     for src in sources:
         meas_task.callMeasure(src, exp)
@@ -165,6 +170,11 @@ def generate_blend_catalog(args: dict):
                                             world.dec + dx[1]*galsim.arcsec)
         final_xy = ref_wcs.toImage(final_world)
 
+        if src.getParent() == 0:
+            outRecord.set(keys['nblend'], 1)
+        else:
+            outRecord.set(keys['nblend'], parent_dict[src.getParent()])
+        outRecord.setParent(src.getParent())
         outRecord.set(keys['evenKey'], np.array(mom_even, dtype=np.float32))
         outRecord.set(keys['oddKey'], np.array(mom_odd, dtype=np.float32))
         outRecord.set(keys['cov_evenKey'], np.array(cov_even, dtype=np.float32))
