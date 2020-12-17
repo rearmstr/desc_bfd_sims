@@ -10,7 +10,7 @@ import lsst.geom as geom
 import lsst.daf.base as dafBase
 import lsst.desc.bfd as dbfd
 from collections import defaultdict
-from descwl_shear_sims.simple_sim import Sim
+from descwl_shear_sims.simple_sim import SimpleSim as Sim
 
 from lsst.meas.base import NoiseReplacerConfig, NoiseReplacer
 from lsst.meas.algorithms import SourceDetectionTask, SourceDetectionConfig
@@ -37,9 +37,7 @@ def generate_blend_catalog(args: dict):
     result = sim.gen_sim()
 
     ref_band = 'i'
-    image = result[ref_band][0]
-    exp = convert_to_dm(result[ref_band][0])
-    noise_sigma = np.sqrt(1./result[ref_band][0].weight[0, 0])
+
 
     schema = afwTable.SourceTable.makeMinimalSchema()
 
@@ -70,93 +68,115 @@ def generate_blend_catalog(args: dict):
 
     deblend_config = SourceDeblendConfig()
     deblend_task = SourceDeblendTask(config=deblend_config, schema=schema)
-    orig_noise_sigma = np.sqrt(1./result[ref_band][0].weight[0, 0])
-    # Detect objects
-    if args.get('pre_det_noise'):
-        original_pixels = exp.image.array.copy()
-        new_pixels = exp.image.array
-        new_pixels[:] += np.random.normal(size=exp.image.array.shape)*args['pre_det_noise']
-
-    table = afwTable.SourceTable.make(schema)
-    det_result = detection_task.run(table, exp)
-
-    if args.get('pre_det_noise'):
-        new_pixels = original_pixels
-
-    if args.get('post_det_noise'):
-        exp.image.array[:] += np.random.normal(size=exp.image.array.shape)*args['post_det_noise']
-        noise_sigma = np.sqrt(orig_noise_sigma**2 + args['post_det_noise']**2)
-        exp.variance.array[:] = noise_sigma**2
-
-    deblend_task.run(exp, det_result.sources)
 
     # Run on deblended images
     noise_replacer_config = NoiseReplacerConfig()
-    footprints = {record.getId(): (record.getParent(), record.getFootprint())
-                  for record in det_result.sources}
+    
+    images= {}
+    exps = {}
+    noise_sigma = {}
+    orig_noise_sigma = {}
+    det_result = {}
+    replacers = {}
+    sources = {}
+    result[ref_band][0]
+    for band in result.bands:
+        images[band] = result[band][0]
+        exps[band] = convert_to_dm(images[band])
+        noise_sigma[band] = np.sqrt(1./result[band][0].weight[0, 0])
+        orig_noise_sigma[band] = np.sqrt(1./result[band][0].weight[0, 0])
 
-    # This constructor will replace all detected pixels with noise in the image
-    replacer = NoiseReplacer(noise_replacer_config, exposure=exp,
-                             footprints=footprints)
-    sources = det_result.sources
+        # Detect objects
+        if args.get('pre_det_noise'):
+            original_pixels = exps[band].image.array.copy()
+            new_pixels = exps[band].image.array
+            new_pixels[:] += np.random.normal(size=exps[band].image.array.shape)*args['pre_det_noise']
+
+        table = afwTable.SourceTable.make(schema)
+        det_result[band] = detection_task.run(table, exps[band])
+
+        if args.get('pre_det_noise'):
+            new_pixels = original_pixels
+
+        if args.get('post_det_noise'):
+            exps[band].image.array[:] += np.random.normal(size=exps[band].image.array.shape)*args['post_det_noise']
+            noise_sigma[band] = np.sqrt(orig_noise_sigma**2 + args['post_det_noise']**2)
+            exps[band].variance.array[:] = noise_sigma**2
+
+        deblend_task.run(exps[band], det_result[band].sources)
+
+
+        footprints = {record.getId(): (record.getParent(), record.getFootprint())
+                      for record in det_result[band].sources}
+
+        # This constructor will replace all detected pixels with noise in the image
+        replacers[band] = NoiseReplacer(noise_replacer_config, exposure=exps[band],
+                                        footprints=footprints)
+        sources[band] = det_result[band].sources
 
     gals = sim._object_data
     ngal = len(gals)
-    ref_band = 'i'
     ref_wcs = result[ref_band][0].wcs
 
     parent_dict = defaultdict(int)
-    for src in sources:
+    for src in sources[ref_band]:
         if src.getParent()!=0:
             parent_dict[src.getParent()] += 1
 
-    for src in sources:
-        meas_task.callMeasure(src, exp)
+    for src in sources[ref_band]:
+
+        meas_task.callMeasure(src, exps[ref_band])
 
         if src.get('deblend_nChild') != 0:
                 continue
 
-        replacer.insertSource(src.getId())
-
         peak = src.getFootprint().getPeaks()[0]
         x_peak, y_peak = peak.getIx() - 0.5, peak.getIy() - 0.5
-
-        if args.get('use_footprint'):
-            bbox = src.getFootprint().getBBox()
-        else:
-            bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
-            bbox.grow(args['stamp_size'] // 2)
-            bbox.clip(exp.getBBox())
-
-        sky = exp.getWcs().pixelToSky(geom.Point2D(x_peak, y_peak))
+        sky = exps[ref_band].getWcs().pixelToSky(geom.Point2D(x_peak, y_peak))
         uv_pos = (sky.getRa().asArcseconds(), sky.getDec().asArcseconds())
         xy_pos = (x_peak, y_peak)
+ 
+        kgals = []
+        for band in result.bands:
+            replacers[band].insertSource(src.getId())
 
-        if args.get('post_blend_noise'):
-            original_pixels = exp.image[bbox].array.copy()
-            new_pixels = exp.image[bbox]
-            new_pixels.array[:] += np.random.normal(size=exp.image[bbox].array.shape)*args['post_blend_noise']
-            noise_sigma = np.sqrt(orig_noise_sigma**2 + args['post_blend_noise']**2)
+            
+
+            if args.get('use_footprint'):
+                bbox = src.getFootprint().getBBox()
+            else:
+                bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
+                bbox.grow(args['stamp_size'] // 2)
+                bbox.clip(exps[band].getBBox())
+
+            
+
+            if args.get('post_blend_noise'):
+                original_pixels = exps[band].image[bbox].array.copy()
+                new_pixels = exps[band].image[bbox]
+                new_pixels.array[:] += np.random.normal(size=exps[band].image[bbox].array.shape)*args['post_blend_noise']
+                noise_sigma[band] = np.sqrt(orig_noise_sigma[band]**2 + args['post_blend_noise']**2)
 
 
-        try:
-            kgal = buildKGalaxyDM(exp, xy_pos, bbox, uv_pos, bfd_config, noise_sigma, weight, _id=src.getId())
-        except:
-            replacer.removeSource(src.getId())
-            print('problem buiding kgalaxy')
-            continue
+            try:
+                kgal = buildKGalaxyDM(exps[band], xy_pos, bbox, uv_pos, bfd_config, noise_sigma[band], weight, _id=src.getId())
+            except:
+                print('problem buiding kgalaxy')
+                continue
 
-        if args.get('post_blend_noise'):
-            new_pixels.array[:] = original_pixels
+            if args.get('post_blend_noise'):
+                new_pixels.array[:] = original_pixels
 
-        kc = dbfd.KColorGalaxy.KColorGalaxy(bfd_config, [kgal], nda=kgal.getNda())
+
+        kc = dbfd.KColorGalaxy.KColorGalaxy(bfd_config, kgals, nda=kgal.getNda())
         world = ref_wcs.toWorld(galsim.PositionD(x_peak, y_peak))
         dx, badcentering, msg = kc.recenter(2)
 
         outRecord = cat.addNew()
         if badcentering:
             outRecord.set(keys['flagKey'], 1)
-            replacer.removeSource(src.getId())
+            for band in result.bands:
+                replacers[band].removeSource(src.getId())
             continue
 
         mom, cov = kc.get_moment(dx[0], dx[1], True)
@@ -185,10 +205,13 @@ def generate_blend_catalog(args: dict):
         outRecord.set(keys['yKey'], final_xy.y)
         outRecord.set('coord_ra', world.ra.rad*geom.radians)
         outRecord.set('coord_dec', world.dec.rad*geom.radians)
-        replacer.removeSource(src.getId())
+        for band in result.bands:
+            replacers[band].removeSource(src.getId())
 
-    replacer.end()
-    return sim, result, cat, exp
+        for band in result.bands:
+            replacers[band].end()
+
+    return sim, result, cat, exps
 
 
 def generate_blend_prior(args: dict):
@@ -200,6 +223,15 @@ def generate_blend_prior(args: dict):
     weight = dbfd.KSigmaWeightF(args['weight_sigma'], args['weight_n'])
 
     keys, bfd_schema = define_prior_schema(bfd_config)
+
+
+
+
+
+
+
+
+
     cat = afwTable.SourceCatalog(bfd_schema)
 
     rng = np.random.RandomState(args['seed'])
@@ -330,7 +362,7 @@ def generate_blend_prior(args: dict):
     ref_wcs = result[ref_band][0].wcs
     atemplates = []
     ngals = 0
-    for src in sources:
+    for src in sources[ref_band]:
         meas_task.callMeasure(src, exp)
 
         if src.get('deblend_nChild') != 0:

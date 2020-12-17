@@ -6,7 +6,7 @@ import lsst.afw.table as afwTable
 import lsst.geom as geom
 import lsst.daf.base as dafBase
 import lsst.desc.bfd as dbfd
-from descwl_shear_sims.simple_sim import Sim
+from descwl_shear_sims.simple_sim import SimpleSim as Sim
 from .utils import buildKGalaxy, define_cat_schema, define_prior_schema, make_templates, compress_cov, getCovariances
 
 def generate_grid_catalog(args: dict):

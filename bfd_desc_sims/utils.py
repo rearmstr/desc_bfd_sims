@@ -13,7 +13,7 @@ from lsst.afw.geom import makeSkyWcs
 from lsst.meas.algorithms import KernelPsf
 from lsst.afw.math import FixedKernel
 
-from descwl_shear_sims.simple_sim import Sim
+from descwl_shear_sims.simple_sim import SimpleSim as Sim
 from typing import Any
 
 
