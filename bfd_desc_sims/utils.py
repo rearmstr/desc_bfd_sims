@@ -303,12 +303,12 @@ def read_prior(filename: str, bfd_config: dbfd.BFDConfig, seed: int = None):
             maxFlux = md['FLUXMAX']
             nSample = md['NSAMPLE']
             selectionOnly = False
-            noiseFactor = md['noiseFactor']
-            priorSigmaStep = md['priorSigmaStep']
-            priorSigmaCutoff = md['priorSigmaCutoff']
-            priorSigmaBuffer = md['priorSigmaBuffer']
-            invariantCovariance = md['invariantCovariance']
-            desel_pqr = np.array(md['desel_pqr'], dtype=np.float32)
+            noiseFactor = md['NOISEFACTOR']
+            priorSigmaStep = md['PRIORSIGMASTEP']
+            priorSigmaCutoff = md['PRIORSIGMACUTOFF']
+            priorSigmaBuffer = md['PRIORSIGMABUFFER']
+            invariantCovariance = md['INVARIANTCOVARIANCE']
+            desel_pqr = np.array(md['DESEL_PQR'], dtype=np.float32)
 
             prior = bfd_config.KDTreePrior(minFlux, maxFlux, covMat, ud,
                                            nSample, selectionOnly,
@@ -321,10 +321,10 @@ def read_prior(filename: str, bfd_config: dbfd.BFDConfig, seed: int = None):
                    (md['COV_ODD']==base_md['COV_ODD']) &
                    (md['FLUXMIN']==base_md['FLUXMIN']) &
                    (md['FLUXMAX']==base_md['FLUXMAX']) &
-                   (md['noiseFactor']==base_md['noiseFactor']) &
-                   (md['priorSigmaStep']==base_md['priorSigmaStep']) &
-                   (md['priorSigmaCutoff']==base_md['priorSigmaCutoff']) &
-                   (md['priorSigmaBuffer']==base_md['priorSigmaBuffer']))
+                   (md['NOISEFACTOR']==base_md['NOISEFACTOR']) &
+                   (md['PRIORSIGMASTEP']==base_md['PRIORSIGMASTEP']) &
+                   (md['PRIORSIGMACUTOFF']==base_md['PRIORSIGMACUTOFF']) &
+                   (md['PRIORSIGMABUFFER']==base_md['PRIORSIGMABUFFER']))
 
         for s in temp:
 
