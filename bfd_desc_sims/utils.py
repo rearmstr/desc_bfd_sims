@@ -275,12 +275,14 @@ def make_templates(rng, kc, sigma_xy, sigma_flux=1., sn_min=0., sigma_max=6.5, s
     return result
 
 
-def read_prior(filename: str, bfd_config: dbfd.BFDConfig, seed: int = None):
+def read_prior(filename: str, bfd_config: dbfd.BFDConfig, seed: int = None, max_files=-1):
     """Create prior from stored variables"""
     n_even = bfd_config.BFDConfig.MSIZE
     n_odd = bfd_config.BFDConfig.XYSIZE
 
     files = glob.glob(filename)
+    if max_files > 0:
+        files = files[:max_files]
 
     if seed:
         ud = dbfd.UniformDeviate(seed)
