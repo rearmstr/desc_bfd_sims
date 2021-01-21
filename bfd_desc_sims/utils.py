@@ -291,7 +291,10 @@ def read_prior(filename: str, bfd_config: dbfd.BFDConfig, seed: int = None, max_
 
     init = False
     for ifile, file in enumerate(files):
-        temp = afwTable.BaseCatalog.readFits(file)
+        try:
+            temp = afwTable.BaseCatalog.readFits(file)
+        except:
+            continue
         md = temp.getTable().getMetadata().toDict()
         print('importing File', file, ' with', len(temp))
         if init is False:
