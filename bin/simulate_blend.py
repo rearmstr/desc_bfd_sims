@@ -104,7 +104,7 @@ if data['run_prior']:
 
             if 'gals_type' in sims_dict:
                 sims_dict['layout_type'] = 'random'
-                sim, result, cat = generate_blend_catalog(cat_args)
+                sim, result, cat, exps = generate_blend_catalog(cat_args)
             else:
                 sims_dict['layout_type'] = 'grid'
                 sim, result, cat = generate_grid_catalog(cat_args)

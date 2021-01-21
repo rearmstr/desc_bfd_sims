@@ -21,9 +21,8 @@ from lsst.meas.base import SingleFrameMeasurementConfig, SingleFrameMeasurementT
 
 from .utils import buildKGalaxy, define_cat_schema, define_prior_schema, make_templates, compress_cov, convert_to_dm, buildKGalaxyDM, getCovariances
 
-from lsst.meas.extensions.scarlet import ScarletDeblendTask, ScarletDeblendConfig
 
-def generate_blend_catalog_scarlet(args: dict):
+def generate_blend_catalog(args: dict):
     """Generate catalog with moment measurements"""
     bfd_config = dbfd.BFDConfig(use_mag=args['use_mag'], use_conc=args['use_conc'],
                                 ncolors=args['ncolors'])
@@ -34,9 +33,12 @@ def generate_blend_catalog_scarlet(args: dict):
     cat = afwTable.SourceCatalog(bfd_schema)
 
     rng = np.random.RandomState(args['seed'])
-
     sim = Sim(rng=rng, **args['sim'])
     result = sim.gen_sim()
+
+    ref_band = list(result.keys())[0]
+
+
     schema = afwTable.SourceTable.makeMinimalSchema()
 
     # Setup algorithms to run
@@ -64,12 +66,8 @@ def generate_blend_catalog_scarlet(args: dict):
         detection_config.thresholdValue = 5
     detection_task = SourceDetectionTask(config=detection_config)
 
-    if args.get('deblend_old'):
-        deblend_config = SourceDeblendConfig()
-        deblend_task = SourceDeblendTask(config=deblend_config, schema=schema)
-    else:
-        deblend_config = ScarletDeblendConfig()
-        deblend_task = ScarletDeblendTask(config=deblend_config, schema=schema)
+    deblend_config = SourceDeblendConfig()
+    deblend_task = SourceDeblendTask(config=deblend_config, schema=schema)
 
     # Run on deblended images
     noise_replacer_config = NoiseReplacerConfig()
@@ -81,10 +79,7 @@ def generate_blend_catalog_scarlet(args: dict):
     det_result = {}
     replacers = {}
     sources = {}
-    original_pixels = {}
-    filters = ''
-    for band in result.bands:
-        filters.append(band)
+    for band in list(result.keys()):
         images[band] = result[band][0]
         exps[band] = convert_to_dm(images[band])
         noise_sigma[band] = np.sqrt(1./result[band][0].weight[0, 0])
@@ -92,49 +87,42 @@ def generate_blend_catalog_scarlet(args: dict):
 
         # Detect objects
         if args.get('pre_det_noise'):
-            original_pixels[band] = exps[band].image.array.copy()
+            original_pixels = exps[band].image.array.copy()
             new_pixels = exps[band].image.array
             new_pixels[:] += np.random.normal(size=exps[band].image.array.shape)*args['pre_det_noise']
 
-    band = args['filter_norm']
-    table = afwTable.SourceTable.make(schema)
-    det_result[band] = detection_task.run(table, exps[band])
-    sources[band] = det_result[band].sources
+        table = afwTable.SourceTable.make(schema)
+        det_result[band] = detection_task.run(table, exps[band])
 
-    for band in result.bands:
         if args.get('pre_det_noise'):
-            exps[band].image.array[:] = original_pixels[band]
+            new_pixels = original_pixels
 
-    if args.get('post_det_noise'):
-        exps[band].image.array[:] += np.random.normal(size=exps[band].image.array.shape)*args['post_det_noise']
-        noise_sigma[band] = np.sqrt(orig_noise_sigma**2 + args['post_det_noise']**2)
-        exps[band].variance.array[:] = noise_sigma**2
+        if args.get('post_det_noise'):
+            exps[band].image.array[:] += np.random.normal(size=exps[band].image.array.shape)*args['post_det_noise']
+            noise_sigma[band] = np.sqrt(orig_noise_sigma[band]**2 + args['post_det_noise']**2)
+            exps[band].variance.array[:] = noise_sigma[band]**2
 
-    if args.get('deblend_old'):
         deblend_task.run(exps[band], det_result[band].sources)
-    else:
-        exposure = afwImage.MultibandExposure.fromExposures(filters, exposures)
-        result = deblend_task.run(exposure, sources[band])
 
 
-    footprints = {record.getId(): (record.getParent(), record.getFootprint())
+        footprints = {record.getId(): (record.getParent(), record.getFootprint())
                       for record in det_result[band].sources}
 
-    # This constructor will replace all detected pixels with noise in the image
-    replacers[band] = NoiseReplacer(noise_replacer_config, exposure=exps[band],
-                                    footprints=footprints)
-    sources[band] = det_result[band].sources
+        # This constructor will replace all detected pixels with noise in the image
+        replacers[band] = NoiseReplacer(noise_replacer_config, exposure=exps[band],
+                                        footprints=footprints)
+        sources[band] = det_result[band].sources
 
     gals = sim._object_data
     ngal = len(gals)
     ref_wcs = result[ref_band][0].wcs
 
     parent_dict = defaultdict(int)
-    for src in sources[band]:
+    for src in sources[ref_band]:
         if src.getParent()!=0:
             parent_dict[src.getParent()] += 1
 
-    for src in sources[band]:
+    for src in sources[ref_band]:
 
         meas_task.callMeasure(src, exps[ref_band])
 
@@ -148,8 +136,10 @@ def generate_blend_catalog_scarlet(args: dict):
         xy_pos = (x_peak, y_peak)
  
         kgals = []
-        for band in result.bands:
+        for band in list(result.keys()):
             replacers[band].insertSource(src.getId())
+
+            
 
             if args.get('use_footprint'):
                 bbox = src.getFootprint().getBBox()
@@ -158,6 +148,7 @@ def generate_blend_catalog_scarlet(args: dict):
                 bbox.grow(args['stamp_size'] // 2)
                 bbox.clip(exps[band].getBBox())
 
+            
 
             if args.get('post_blend_noise'):
                 original_pixels = exps[band].image[bbox].array.copy()
@@ -176,14 +167,14 @@ def generate_blend_catalog_scarlet(args: dict):
                 new_pixels.array[:] = original_pixels
 
 
-        kc = dbfd.KColorGalaxy.KColorGalaxy(bfd_config, kgals, nda=kgal.getNda())
+        kc = dbfd.KColorGalaxy.KColorGalaxy(bfd_config, [kgal], nda=kgal.getNda())
         world = ref_wcs.toWorld(galsim.PositionD(x_peak, y_peak))
         dx, badcentering, msg = kc.recenter(2)
 
         outRecord = cat.addNew()
         if badcentering:
             outRecord.set(keys['flagKey'], 1)
-            for band in result.bands:
+            for band in list(result.keys()):
                 replacers[band].removeSource(src.getId())
             continue
 
@@ -213,16 +204,16 @@ def generate_blend_catalog_scarlet(args: dict):
         outRecord.set(keys['yKey'], final_xy.y)
         outRecord.set('coord_ra', world.ra.rad*geom.radians)
         outRecord.set('coord_dec', world.dec.rad*geom.radians)
-        for band in result.bands:
+        for band in list(result.keys()):
             replacers[band].removeSource(src.getId())
 
-        for band in result.bands:
-            replacers[band].end()
+    for band in list(result.keys()):
+        replacers[band].end()
 
     return sim, result, cat, exps
 
 
-def generate_blend_prior_scarlet(args: dict):
+def generate_blend_prior(args: dict):
     """Generate prior catalog"""
     bfd_config = dbfd.BFDConfig(use_mag=args['use_mag'], use_conc=args['use_conc'],
                                 ncolors=args['ncolors'])
@@ -231,6 +222,14 @@ def generate_blend_prior_scarlet(args: dict):
     weight = dbfd.KSigmaWeightF(args['weight_sigma'], args['weight_n'])
 
     keys, bfd_schema = define_prior_schema(bfd_config)
+
+
+
+
+
+
+
+
 
     cat = afwTable.SourceCatalog(bfd_schema)
 
@@ -264,6 +263,10 @@ def generate_blend_prior_scarlet(args: dict):
                                          noiseFactor, priorSigmaStep, priorSigmaCutoff,
                                          priorSigmaBuffer, invariantCovariance)
 
+    ref_band = list(result.keys())[0]
+    image = result[ref_band][0]
+    exp = convert_to_dm(result[ref_band][0])
+    noise_sigma = np.sqrt(1./result[ref_band][0].weight[0, 0])
 
     schema = afwTable.SourceTable.makeMinimalSchema()
 
@@ -292,51 +295,25 @@ def generate_blend_prior_scarlet(args: dict):
         detection_config.thresholdValue = 5
     detection_task = SourceDetectionTask(config=detection_config)
 
-    if args.get('deblend_old'):
-        deblend_config = SourceDeblendConfig()
-        deblend_task = SourceDeblendTask(config=deblend_config, schema=schema)
-    else:
-        deblend_config = ScarletDeblendConfig()
-        deblend_task = ScarletDeblendTask(config=deblend_config, schema=schema)
+    deblend_config = SourceDeblendConfig()
+    deblend_task = SourceDeblendTask(config=deblend_config, schema=schema)
 
-    images= {}
-    exps = {}
-    noise_sigma = {}
-    orig_noise_sigma = {}
-    det_result = {}
-    replacers = {}
-    sources = {}
-    original_pixels = {}
-    filters = ''
-    for band in result.bands:
-        filters.append(band)
-        images[band] = result[band][0]
-        exps[band] = convert_to_dm(images[band])
-        noise_sigma[band] = np.sqrt(1./result[band][0].weight[0, 0])
-        orig_noise_sigma[band] = np.sqrt(1./result[band][0].weight[0, 0])
-
-        # Detect objects
-        if args.get('prior_pre_det_noise'):
-            original_pixels[band] = exps[band].image.array.copy()
-            new_pixels = exps[band].image.array
-            new_pixels[:] += np.random.normal(size=exps[band].image.array.shape)*args['pre_det_noise']
-
-    band = args['filter_norm']
-    image = result[band][0]
-    exp = exps[band]
-    noise_sigma = np.sqrt(1./result[band][0].weight[0, 0])
+    # Detect objects
+    if args.get('prior_pre_det_noise'):
+        add_noise = np.sqrt(noise_sigma**2 + args['prior_pre_det_noise']**2)
+        print('Adding noise with sigma=', add_noise)
+        original_pixels = exp.image.array.copy()
+        new_pixels = exp.image.array
+        new_pixels[:] += np.random.normal(size=exp.image.array.shape)*add_noise
 
     table = afwTable.SourceTable.make(schema)
     det_result = detection_task.run(table, exp)
 
-
-    for band in result.bands:
-        if args.get('prior_pre_det_noise'):
-            exps[band].image.array[:] = original_pixels[band]
+    if args.get('prior_pre_det_noise'):
+        new_pixels = original_pixels
     
     if args.get('add_prior_noise_det'):
-
-        add_noise = np.sqrt(noise_sigma[band]**2 + args['prior_noise']**2)
+        add_noise = np.sqrt(noise_sigma**2 + args['prior_noise']**2)
         exp_noise = afwImage.ExposureF(exp,deep=True)
         exp_noise.image.array += np.random.normal(size=exp_noise.image.array.shape)*add_noise
 
@@ -367,12 +344,7 @@ def generate_blend_prior_scarlet(args: dict):
                         footprint.addPeak(px, py, exp_noise.image.array[int(py), int(px)])            
                         rec.setFootprint(footprint)
 
-    if args.get('deblend_old'):
-        deblend_task.run(exp, det_result.sources)
-    else:
-        exposure = afwImage.MultibandExposure.fromExposures(filters, exposures)
-        result = deblend_task.run(exposure, sources[band])
-
+    deblend_task.run(exp, det_result.sources)
     # Run on deblended images
     noise_replacer_config = NoiseReplacerConfig()
     footprints = {record.getId(): (record.getParent(), record.getFootprint())
@@ -381,13 +353,14 @@ def generate_blend_prior_scarlet(args: dict):
     # This constructor will replace all detected pixels with noise in the image
     replacer = NoiseReplacer(noise_replacer_config, exposure=exp,
                              footprints=footprints)
+    sources = det_result.sources
 
     gals = sim._object_data
 
-    ref_wcs = result[band][0].wcs
+    ref_wcs = result[ref_band][0].wcs
     atemplates = []
     ngals = 0
-    for src in sources[band]:
+    for src in sources:
         meas_task.callMeasure(src, exp)
 
         if src.get('deblend_nChild') != 0:
