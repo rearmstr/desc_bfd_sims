@@ -117,7 +117,7 @@ def generate_blend_catalog_scarlet(args: dict):
     else:
         exposure = afwImage.MultibandExposure.fromExposures(filters, list(exps.values()))
         dresult = deblend_task.run(exposure, sources[band])
-        sources[band] = dresult[1][band].copy(deep=True)
+        sources[band] = dresult[band].copy(deep=True)
 
 
     footprints = {record.getId(): (record.getParent(), record.getFootprint())
@@ -371,7 +371,7 @@ def generate_blend_prior_scarlet(args: dict):
     else:
         exposure = afwImage.MultibandExposure.fromExposures(filters, list(exps.values()))
         dresult = deblend_task.run(exposure, sources[band])
-        sources[band] = dresult[1][band].copy(deep=True)
+        sources[band] = dresult[band].copy(deep=True)
 
     # Run on deblended images
     noise_replacer_config = NoiseReplacerConfig()
