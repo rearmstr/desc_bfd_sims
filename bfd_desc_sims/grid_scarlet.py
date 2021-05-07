@@ -184,7 +184,6 @@ def generate_grid_catalog_scarlet(args: dict):
             xx.append(x)
             yy.append(y)
 
-
             sed = ised.withFlux(flux, filters[filter_norm])
             disk = galsim.Exponential(half_light_radius=hlr)
             mgal = disk*sed
@@ -198,12 +197,15 @@ def generate_grid_catalog_scarlet(args: dict):
         noise = galsim.GaussianNoise(rng, sigma=noise_sigma)
         for i,image in enumerate(images):
             image.addNoise(noise)
-            #image.write(f'im_{filters_all[i]}.fits')
+            if args.get('write_image'):
+                image.write(f"{args['outdir']}/im{igal}_{filters_all[i]}.fits")
         exposures=[]
 
         for i,image in enumerate(images):
             exp = convert_dm(image, args['noise_sigma'], args['scale'], psf_image)
             exposures.append(exp)
+            #exp.writeFits(f'exp1_{filters_all[i]}.fits')
+
 
         schema = afwTable.SourceTable.makeMinimalSchema()
         # Setup algorithms to run
@@ -229,6 +231,8 @@ def generate_grid_catalog_scarlet(args: dict):
             detection_config.thresholdValue = args['threshold']
         else:
             detection_config.thresholdValue = 5
+        if args.get('nSigmaToGrow'):
+            detection_config.nSigmaToGrow = args['nSigmaToGrow']
         detection_task = SourceDetectionTask(config=detection_config)
 
         deblend_config = SourceDeblendConfig()
@@ -237,6 +241,18 @@ def generate_grid_catalog_scarlet(args: dict):
         exposure = afwImage.MultibandExposure.fromExposures(filters_all, exposures)
 
         mdeblend_config = ScarletDeblendConfig()
+        #mdeblend_config.sourceModel='double'
+        if args.get('ignore_singles'):
+            mdeblend_config.processSingles = False
+        if args.get('resizing'):
+            mdeblend_config.resizing = args['resizing']
+        if args.get('boxsize'):
+            mdeblend_config.boxsize = args['boxsize']
+        if args.get('fallback'):
+            mdeblend_config.fallback = args['fallback']
+        if args.get('source_model'):
+            mdeblend_config.sourceModel = args['source_model']
+
         mdeblend_task = ScarletDeblendTask(config=mdeblend_config, schema=schema)
 
         # Detect objects
@@ -249,7 +265,10 @@ def generate_grid_catalog_scarlet(args: dict):
             print('problem with deblend:',e)
             continue
 
-        sources = result[1][filters_all[0]].copy(deep=True)
+        if args.get('old_scarlet'):
+            sources = result[1][filters_all[0]].copy(deep=True)
+        else:
+            sources = result[filters_all[0]].copy(deep=True)
         # Run on deblended images
         noise_replacer_config = NoiseReplacerConfig()
         footprints = {record.getId(): (record.getParent(), record.getFootprint())
@@ -269,14 +288,16 @@ def generate_grid_catalog_scarlet(args: dict):
             if src.getParent()!=0:
                 parent_dict[src.getParent()] += 1
 
-
-        for src in sources:
+        
+        for isrc, src in enumerate(sources):
             meas_task.callMeasure(src, exp)
 
             if src.get('deblend_nChild') != 0:
                     continue
 
             replacer.insertSource(src.getId())
+            if args.get('write_blend'):
+                exp.writeFits(f"{args['outdir']}/blend{isrc}.fits")
 
             peak = src.getFootprint().getPeaks()[0]
             x_peak, y_peak = peak.getIx() - 0.5, peak.getIy() - 0.5
@@ -328,7 +349,7 @@ def generate_grid_catalog_scarlet(args: dict):
             else:
                 outRecord.set(keys['nblend'], parent_dict[src.getParent()])
             outRecord.setParent(src.getParent())
-
+            print('BFD mom',mom_even)
             outRecord.set(keys['gal'], index)
             outRecord.set(keys['true_x'], true_x)
             outRecord.set(keys['true_y'], true_y)
@@ -343,7 +364,7 @@ def generate_grid_catalog_scarlet(args: dict):
             replacer.removeSource(src.getId())
 
         replacer.end()   
-
+        #sources.writeFits(f'src.fits')
 
     return cat
 
@@ -536,7 +557,18 @@ def generate_grid_prior_scarlet(args: dict):
 
         mdeblend_config = ScarletDeblendConfig()
         mdeblend_task = ScarletDeblendTask(config=mdeblend_config, schema=schema)
+        if args.get('ignore_singles'):
+            mdeblend_config.processSingles = False
+        if args.get('resizing'):
+            mdeblend_config.resizing = args['resizing']
+        if args.get('boxsize'):
+            mdeblend_config.boxsize = args['boxsize']
+        if args.get('fallback'):
+            mdeblend_config.fallback = args['fallback']
+        if args.get('source_model'):
+            mdeblend_config.sourceModel = args['source_model']
 
+        
         # Detect objects
         table = afwTable.SourceTable.make(schema)
         det_result = detection_task.run(table, exposure[filter_norm])
@@ -547,7 +579,10 @@ def generate_grid_prior_scarlet(args: dict):
             print('problem with deblend:',e)
             continue
 
-        sources = result[1][filters_all[0]].copy(deep=True)
+        if args.get('old_scarlet'):
+            sources = result[1][filters_all[0]].copy(deep=True)
+        else:
+            sources = result[filters_all[0]].copy(deep=True)
         # Run on deblended images
         noise_replacer_config = NoiseReplacerConfig()
         footprints = {record.getId(): (record.getParent(), record.getFootprint())
@@ -568,7 +603,7 @@ def generate_grid_prior_scarlet(args: dict):
                 parent_dict[src.getParent()] += 1
 
 
-        for src in sources:
+        for isrc, src in enumerate(sources):
             meas_task.callMeasure(src, exp)
 
             if src.get('deblend_nChild') != 0:
