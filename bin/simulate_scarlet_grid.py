@@ -31,11 +31,11 @@ def generate_scarlet_grid_catalog_write(args: dict):
         print("Failed to generate catalog:", e)
         return
     cat.writeFits(f"{args['outdir']}/{args['galfile']}_{args['index']}.fits")
-    if args.get('write_image'):
-        for band,imlist in result.items():
-            for ii,im in enumerate(imlist):
-                im.image.write(f"{args['outdir']}/image_{args['galfile']}_{args['index']}_{band}_{ii}.fits")
-                exp.writeFits(f"{args['outdir']}/exp_{args['galfile']}_{args['index']}_{band}_{ii}.fits")
+    # if args.get('write_image'):
+    #     for band,imlist in result.items():
+    #         for ii,im in enumerate(imlist):
+    #             im.image.write(f"{args['outdir']}/image_{args['galfile']}_{args['index']}_{band}_{ii}.fits")
+    #             exp.writeFits(f"{args['outdir']}/exp_{args['galfile']}_{args['index']}_{band}_{ii}.fits")
 
     if args.get('write_truth'):
 
