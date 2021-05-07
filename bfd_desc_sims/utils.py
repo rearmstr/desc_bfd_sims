@@ -16,7 +16,7 @@ from lsst.afw.math import FixedKernel
 from descwl_shear_sims.simple_sim import SimpleSim as Sim
 from typing import Any
 
-
+  
 def buildKGalaxy(weight: dbfd.KSigmaWeightF,
                  bfd_config: dbfd.BFDConfig,
                  xy_pos: tuple,
@@ -133,6 +133,28 @@ def define_pqr_schema(bfd_config: dbfd.BFDConfig):
         'bfd_flag', type="Flag", doc="Set to 1 for any fatal failure")
     return keys, schema
 
+def define_pqr_z_schema(bfd_config: dbfd.BFDConfig, zbins):
+    """Create schema for pqr catalogs"""
+    n_even = bfd_config.BFDConfig.MSIZE
+
+    schema = afwTable.SourceTable.makeMinimalSchema()
+    keys = {}
+    keys['pqrKey'] = schema.addField("pqr", doc="pqr", type="ArrayF",
+                                     size=bfd_config.BFDConfig.DSIZE*zbins)
+    keys['momKey'] = schema.addField("moment", doc="moment", type="ArrayF",
+                                     size=n_even)
+    keys['momCovKey'] = schema.addField("moment_cov", doc="moment", type="ArrayF",
+                                        size=n_even*(n_even + 1) // 2)
+    keys['redshift'] = schema.addField("redshift", doc="true redshift", type=np.float)
+    keys['redshift_bin'] = schema.addField("redshift_bin", doc="true redshift bin", type=np.int32)
+    keys['g1'] = schema.addField("g1", doc="true shear g1", type=np.float)
+    keys['g2'] = schema.addField("g2", doc="true shear g1", type=np.float)
+    keys['numKey'] = schema.addField("n_templates", doc="number", type=np.int64)
+    keys['uniqKey'] = schema.addField("n_unique", doc="unique", type=np.int32)
+    keys['flagKey'] = schema.addField(
+        'bfd_flag', type="Flag", doc="Set to 1 for any fatal failure")
+    return keys, schema
+
 
 def compress_cov(cov: Any):
     """Convert 2d symetric array to 1d for storage"""
@@ -180,7 +202,7 @@ def getCovariances(file: str, n_even: int, n_odd: int):
 
 
 def make_templates(rng, kc, sigma_xy, sigma_flux=1., sn_min=0., sigma_max=6.5, sigma_step=1.,
-                   xy_max=2., tid=0, weight_sigma=4,
+                   xy_max=2., tid=0, weight_sigma=4, zbins=0,
                    **kwargs):
     """Return a list of Template instances that move the object on a grid of
     coordinate origins that keep chisq contribution of flux and center below
@@ -231,7 +253,7 @@ def make_templates(rng, kc, sigma_xy, sigma_flux=1., sn_min=0., sigma_max=6.5, s
         if np.dot(xy, xy) > xy_max*xy_max:
             continue
 
-        mom, cov = kc.get_moment(dx[0] + xy[0], dx[1] + xy[1])
+        mom, cov = kc.get_moment(dx[0] + xy[0], dx[1] + xy[1], zbins)
         even = mom.m
         odd = mom.xy
 
@@ -258,7 +280,7 @@ def make_templates(rng, kc, sigma_xy, sigma_flux=1., sn_min=0., sigma_max=6.5, s
         if chisq <= sigma_max*sigma_max:
             # This is a useful template!  Add it to output list
 
-            tmpl = kc.get_template(dx[0] + xy[0], dx[1] + xy[1])
+            tmpl = kc.get_template(dx[0] + xy[0], dx[1] + xy[1], zbins)
             tmpl.nda = tmpl.nda * da
             tmpl.jSuppression = detj / detj0
             tmpl.id = tid
@@ -275,7 +297,7 @@ def make_templates(rng, kc, sigma_xy, sigma_flux=1., sn_min=0., sigma_max=6.5, s
     return result
 
 
-def read_prior(filename: str, bfd_config: dbfd.BFDConfig, seed: int = None, max_files=-1):
+def read_prior(filename: str, bfd_config: dbfd.BFDConfig, seed: int = None, max_files=-1, includeZ=False):
     """Create prior from stored variables"""
     n_even = bfd_config.BFDConfig.MSIZE
     n_odd = bfd_config.BFDConfig.XYSIZE
@@ -341,7 +363,8 @@ def read_prior(filename: str, bfd_config: dbfd.BFDConfig, seed: int = None, max_
             ti.dxy = s.get('dxy').reshape(bfd_config.BFDConfig.XYSIZE, bfd_config.BFDConfig.DSIZE)
             ti.nda = s.get('nda')
             ti.id = s.get('bfd_id')
-
+            if includeZ:
+                ti.zData = s.get('zData')
             prior.addTemplateInfo(ti)
 
     print('Preparing prior')
@@ -443,6 +466,133 @@ def generate_pqr(args: dict,
                 pass
             #    import pdb;pdb.set_trace()
 
+    return outcat, pqr_sum
+
+
+
+
+def generate_pqr_z(args: dict,
+                  prior: Any,
+                  file: str,
+                  desel_pqr: Any):
+    """From a catalog and prior compute the pqr values"""
+    print('Reading ', file)
+
+    cat = afwTable.BaseCatalog.readFits(file)
+    bfd_config = dbfd.BFDConfig(use_mag=args['use_mag'], use_conc=args['use_conc'],
+                                ncolors=args['ncolors'])
+    n_even = bfd_config.BFDConfig.MSIZE
+    n_odd = bfd_config.BFDConfig.XYSIZE
+    zbins = args['zbins']
+    nz = len(zbins) - 1
+    tgs = []
+    n_lost = 0
+
+    full_cov_even = np.zeros((n_even, n_even), dtype=np.float32)
+    full_cov_odd = np.zeros((n_odd, n_odd), dtype=np.float32)
+    full_cov_even[:, :] = np.nan
+    full_cov_odd[:, :] = np.nan
+    if args.get('add_nblend_pqr'):
+        nblend = {}
+    print('finished 1')
+    for irec, rec in enumerate(cat):
+
+        if 'diff_covariance' in args:
+            cov_even = rec.get('bfd_cov_even')
+            cov_odd = rec.get('bfd_cov_odd')
+
+            full_cov_even = uncompress_cov(cov_even, n_even)
+            full_cov_odd = uncompress_cov(cov_odd, n_odd)
+
+            cov = bfd_config.MomentCov(full_cov_even, full_cov_odd)
+
+        else:
+            if np.any(np.isnan(full_cov_even)):
+                cov_even = rec.get('bfd_cov_even')
+                cov_odd = rec.get('bfd_cov_odd')
+
+                full_cov_even = uncompress_cov(cov_even, n_even)
+                full_cov_odd = uncompress_cov(cov_odd, n_odd)
+
+                cov = bfd_config.MomentCov(full_cov_even, full_cov_odd)
+            else:
+                cov = bfd_config.MomentCov(full_cov_even, full_cov_odd)
+
+        if rec['bfd_flag']:
+            tg = bfd_config.TargetGalaxy()
+            tgs.append(tg)
+            n_lost += 1
+            continue
+
+        moment = bfd_config.Moment(rec.get('bfd_even'), rec.get('bfd_odd'))
+        pos = np.array([rec.get('coord_ra').asDegrees(),
+                        rec.get('coord_dec').asDegrees()])
+        tid = rec.get('id')
+        tg = bfd_config.TargetGalaxy(moment, cov, pos, tid)
+        tgs.append(tg)
+        if args.get('add_nblend_pqr'):
+            nblend[tid] = rec['nblend']
+
+    results = prior.getPqrZCatalog(tgs, args['n_threads'], args['n_chunk'], nz)
+    keys, schema = define_pqr_z_schema(bfd_config, nz)
+
+    if args.get('add_nblend_pqr'):
+        keys['nblend'] = schema.addField('nblend', type=np.int32, doc="number of objects in blend")
+
+    outcat = afwTable.BaseCatalog(schema)
+    pqr_sum = []
+    for i in range(nz):
+        pqr_sum.append(bfd_config.Pqr())
+
+
+    bad = 0
+    #nl_desel_pqr = bfd_config.Pqr(desel_pqr).neglog()
+    for ii,(r, tg) in enumerate(zip(results, tgs)):
+
+        out = outcat.addNew()
+        if (len(r) != 3) or (len(r[0]) != nz) :
+            bad += 1
+            out.set(keys['flagKey'], 1)
+            out.set(keys['numKey'], r[1])
+            out.set(keys['uniqKey'], r[2])
+            out.set(keys['momKey'], tg.mom.m)
+            cov_even, cov_odd = compress_cov(tg.cov)
+            out.set(keys['momCovKey'], np.array(cov_even, dtype=np.float32))
+            out.set('coord_ra', tg.position[0]*geom.radians)
+            out.set('coord_dec', tg.position[1]*geom.radians)
+            out.set(keys['redshift'], cat[ii]['redshift'])
+            out.set(keys['redshift_bin'], int(cat[ii]['redshift_bin']))
+            out.set(keys['g1'], cat[ii]['g1'])
+            out.set(keys['g2'], cat[ii]['g2'])
+            continue
+        pqr_all = []
+
+        for iz in range(nz):
+            pqr = bfd_config.Pqr(r[0][iz]._pqr).neglog()
+            pqr_sum[iz] += pqr
+            pqr_all.append(pqr._pqr)
+
+        out.set(keys['pqrKey'], np.array(pqr_all).flatten().astype(np.float32))
+        out.set(keys['numKey'], r[1])
+        out.set(keys['uniqKey'], r[2])
+        out.set(keys['momKey'], tg.mom.m)
+        cov_even, cov_odd = compress_cov(tg.cov)
+        out.set(keys['momCovKey'], np.array(cov_even, dtype=np.float32))
+        out.set('coord_ra', tg.position[0]*geom.radians)
+        out.set('coord_dec', tg.position[1]*geom.radians)
+        out.set(keys['redshift'], cat[ii]['redshift'])
+        out.set(keys['redshift_bin'], int(cat[ii]['redshift_bin']))
+        out.set(keys['g1'], cat[ii]['g1'])
+        out.set(keys['g2'], cat[ii]['g2'])
+
+        if args.get('add_nblend_pqr'):
+            try:
+                out.set(keys['nblend'], nblend[tg.id])
+            except:
+                pass
+            #    import pdb;pdb.set_trace()
+    #import pdb;pdb.set_trace()
+    #print('finished 6')
     return outcat, pqr_sum
 
 
