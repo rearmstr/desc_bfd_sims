@@ -44,6 +44,8 @@ parser.add_argument('--dry_run', action='store_true',
                     help="don't submit files just generate them")
 parser.add_argument('--no_prior', action='store_true',
                     help="don't run prior")
+parser.add_argument('--submit_prior', action='store_true',
+                    help="submit prior to batch system")
 args = parser.parse_args()
 
 
@@ -56,11 +58,41 @@ if os.path.exists('submit') is False:
 indexes = list(range(args.start, args.start+args.files))
 index_lists = [indexes[i::args.njobs] for i in range(args.njobs)]
 
+if args.submit_prior:
+    args.no_prior = True
 if args.no_prior is False:
     cmd = f"python bfd_desc_sims/bin/simulate_scarlet_blend.py {args.config_file} run_prior=True run_pqr=False njobs=0 {args.prior_args}"
     if args.dry_run is False:
         print(cmd)
         pipe = sub.call(cmd, stdout=sub.PIPE, shell=True)
+    else:
+        print(cmd)
+dependency = None
+
+if args.submit_prior:
+    cmd = f"python bfd_desc_sims/bin/simulate_scarlet_blend.py {args.config_file} run_prior=True run_pqr=False njobs=0 {args.prior_args}"
+    output = f"logs/log.prior.{args.name}"
+
+    submit_text = f"""#!/bin/bash
+#SBATCH -N 1
+#SBATCH -c {args.n_threads}
+#SBATCH --output={output}
+#SBATCH -t {args.hours}:{args.mins:02d}:00
+#SBATCH -A {args.bank}
+#SBATCH -p {args.partition}
+{cmd} """
+
+    if args.dry_run is False:
+        submit_file = f"submit/submit_prior_{args.name}.cmd"
+        ofile = open(submit_file, 'w')
+        ofile.write(submit_text)
+        ofile.close()
+        pipe = sub.Popen(['sbatch', submit_file], stdout=sub.PIPE)
+        output, err = pipe.communicate()
+
+        jobid = re.search('Submitted batch job (\d*)', output.decode()).groups()[0]
+        dependency = 'afterany:' + jobid
+        time.sleep(2)
     else:
         print(cmd)
 
@@ -81,7 +113,11 @@ for i, index_list in enumerate(index_lists):
 #SBATCH -t {args.hours}:{args.mins:02d}:00
 #SBATCH -A {args.bank}
 #SBATCH -p {args.partition}
-{cmd} """
+"""
+
+    if dependency:
+        submit_text += f"#SBATCH -d {dependency} \n"
+    submit_text += f"{cmd}\n"
 
     submit_file = f"submit/submit_{i}_{args.name}.cmd"
     ofile = open(submit_file, 'w')
