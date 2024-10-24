@@ -23,7 +23,7 @@ from .utils import buildKGalaxy, define_cat_schema, define_prior_schema, make_te
 
 from lsst.meas.extensions.scarlet import ScarletDeblendTask, ScarletDeblendConfig
 
-def generate_blend_catalog_scarlet_nn(args: dict):
+def generate_blend_catalog_scarlet(args: dict):
     """Generate catalog with moment measurements"""
     bfd_config = dbfd.BFDConfig(use_mag=args['use_mag'], use_conc=args['use_conc'],
                                 ncolors=args['ncolors'])
@@ -62,6 +62,10 @@ def generate_blend_catalog_scarlet_nn(args: dict):
         detection_config.thresholdValue = args['threshold']
     else:
         detection_config.thresholdValue = 5
+
+    if args.get('n_sigma_to_grow'):
+        detection_config.nSigmaToGrow = args['n_sigma_to_grow']
+        print('GROWWWWWWWINGDFKLSLDKFSLKDFLSKDFLSK')
     detection_task = SourceDetectionTask(config=detection_config)
 
     if args.get('deblend_old'):
@@ -92,9 +96,9 @@ def generate_blend_catalog_scarlet_nn(args: dict):
 
         # Detect objects
         if args.get('pre_det_noise'):
-            original_pixels[iband] = exps[iband].image.array.copy()
-            new_pixels = exps[iband].image.array
-            new_pixels[:] += np.random.normal(size=exps[iband].image.array.shape)*args['pre_det_noise']
+            original_pixels[band] = exps[band].image.array.copy()
+            new_pixels = exps[band].image.array
+            new_pixels[:] += np.random.normal(size=exps[band].image.array.shape)*args['pre_det_noise']
 
     band = args['filter_norm']
     table = afwTable.SourceTable.make(schema)
@@ -105,7 +109,6 @@ def generate_blend_catalog_scarlet_nn(args: dict):
     for iband in bands:
         if args.get('pre_det_noise'):
             exps[band].image.array[:] = original_pixels[band]
-        #exps[iband].writeFits(f'ji_{iband}.fits')
 
     if args.get('post_det_noise'):
         exps[band].image.array[:] += np.random.normal(size=exps[band].image.array.shape)*args['post_det_noise']
@@ -125,10 +128,9 @@ def generate_blend_catalog_scarlet_nn(args: dict):
                       for record in sources[band]}
 
     # This constructor will replace all detected pixels with noise in the image
-    full_exp = afwImage.ExposureF(exps[band], True)
     replacers[band] = NoiseReplacer(noise_replacer_config, exposure=exps[band],
                                     footprints=footprints)
-    noise_exp = afwImage.ExposureF(exps[band], True)
+
     gals = sim._object_data
     ngal = len(gals)
     ref_wcs = result[band][0].wcs
@@ -138,111 +140,92 @@ def generate_blend_catalog_scarlet_nn(args: dict):
         if src.getParent()!=0:
             parent_dict[src.getParent()] += 1
 
-    parent_cat = sources[band].getChildren(0)
-    cur = 0
-    for parent in parent_cat:
+    for src in sources[band]:
 
-        child_cat = sources[band].getChildren(parent.getId())
-        print(f'parent {parent.getId()} size: {len(child_cat)}')
-        for src in child_cat:
+        meas_task.callMeasure(src, exps[band])
 
-            # replacers[band].insertSource(src.getId())
-            # meas_task.callMeasure(src, exps[band])
-            # replacers[band].removeSource(src.getId())
-
-
-            peak = src.getFootprint().getPeaks()[0]
-            x_peak, y_peak = peak.getIx() - 0.5, peak.getIy() - 0.5
-            sky = exps[band].getWcs().pixelToSky(geom.Point2D(x_peak, y_peak))
-            uv_pos = (sky.getRa().asArcseconds(), sky.getDec().asArcseconds())
-            xy_pos = (x_peak, y_peak)
-     
-            kgals = []
-
-            if args.get('use_footprint'):
-                bbox = src.getFootprint().getBBox()
-            else:
-                bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
-                bbox.grow(args['stamp_size'] // 2)
-                bbox.clip(exps[band].getBBox())
-
-            image = afwImage.ExposureF(noise_exp[bbox], True)
-            footprint_bbox = parent.getFootprint().getBBox()
-            footprint_bbox.clip(bbox)
-            image[footprint_bbox].image.array[:] = full_exp[footprint_bbox].image.array
-
-            nbr_image = afwImage.ExposureF(full_exp[bbox], True)
-            nbr_image.image.array[:, :] = 0
-
-            for neigh in child_cat:
-                if neigh == src:
-                    continue
-                replacers[band].insertSource(neigh.getId())
-                nbr_image.image[footprint_bbox] += exps[band].image[footprint_bbox]
-                replacers[band].removeSource(neigh.getId())
-
-            image.image[bbox].array[:] -= nbr_image.image[bbox].array
-
-            if args.get('post_blend_noise'):
-                image.image.array[:] += np.random.normal(size=image.image[bbox].array.shape)*args['post_blend_noise']
-                noise_sigma[band] = np.sqrt(orig_noise_sigma[band]**2 + args['post_blend_noise']**2)
-
-            if args.get('write_im'):
-                image.writeFits(f"{args['outdir']}/im_{cur}.fits")
-                nbr_image.writeFits(f"{args['outdir']}/nbr_im_{cur}.fits")
-                full_exp[bbox].writeFits(f"{args['outdir']}/exp_{cur}.fits")
-            cur += 1
-
-            try:
-                kgal = buildKGalaxyDM(image, xy_pos, bbox, uv_pos, bfd_config, noise_sigma[band], weight, _id=src.getId())
-            except:
-                print('problem buiding kgalaxy')
+        if src.get('deblend_nChild') != 0:
                 continue
 
-            kc = dbfd.KColorGalaxy.KColorGalaxy(bfd_config, [kgal], nda=kgal.getNda())
-            world = ref_wcs.toWorld(galsim.PositionD(x_peak, y_peak))
-            dx, badcentering, msg = kc.recenter(2)
+        peak = src.getFootprint().getPeaks()[0]
+        x_peak, y_peak = peak.getIx() - 0.5, peak.getIy() - 0.5
+        sky = exps[band].getWcs().pixelToSky(geom.Point2D(x_peak, y_peak))
+        uv_pos = (sky.getRa().asArcseconds(), sky.getDec().asArcseconds())
+        xy_pos = (x_peak, y_peak)
+ 
+        kgals = []
 
-            outRecord = cat.addNew()
-            if badcentering:
-                outRecord.set(keys['flagKey'], 1)
-                continue
+        replacers[band].insertSource(src.getId())
 
-            mom, cov = kc.get_moment(dx[0], dx[1], True)
+        if args.get('use_footprint'):
+            bbox = src.getFootprint().getBBox()
+        else:
+            bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
+            bbox.grow(args['stamp_size'] // 2)
+            bbox.clip(exps[iband].getBBox())
 
-            mom_even = mom.m
-            mom_odd = mom.xy
-            cov_even, cov_odd = compress_cov(cov)
 
-            # compute final position
-            final_world = galsim.CelestialCoord(world.ra + dx[0]*galsim.arcsec,
-                                                world.dec + dx[1]*galsim.arcsec)
-            final_xy = ref_wcs.toImage(final_world)
+        if args.get('post_blend_noise'):
+            original_pixels = exps[band].image[bbox].array.copy()
+            new_pixels = exps[band].image[bbox]
+            new_pixels.array[:] += np.random.normal(size=exps[band].image[bbox].array.shape)*args['post_blend_noise']
+            noise_sigma[band] = np.sqrt(orig_noise_sigma[band]**2 + args['post_blend_noise']**2)
 
-            if src.getParent() == 0:
-                outRecord.set(keys['nblend'], 1)
-            else:
-                outRecord.set(keys['nblend'], parent_dict[src.getParent()])
-            outRecord.setParent(src.getParent())
-            outRecord.set(keys['evenKey'], np.array(mom_even, dtype=np.float32))
-            outRecord.set(keys['oddKey'], np.array(mom_odd, dtype=np.float32))
-            outRecord.set(keys['cov_evenKey'], np.array(cov_even, dtype=np.float32))
-            outRecord.set(keys['cov_oddKey'], np.array(cov_odd, dtype=np.float32))
-            outRecord.set(keys['shiftKey'], np.array(
-                [dx[0], dx[1]], dtype=np.float32))
-            outRecord.set(keys['xKey'], final_xy.x)
-            outRecord.set(keys['yKey'], final_xy.y)
-            outRecord.set('coord_ra', world.ra.rad*geom.radians)
-            outRecord.set('coord_dec', world.dec.rad*geom.radians)
 
-        
+        try:
+            kgal = buildKGalaxyDM(exps[band], xy_pos, bbox, uv_pos, bfd_config, noise_sigma[band], weight, _id=src.getId())
+        except:
+            print('problem buiding kgalaxy')
+            continue
+
+        if args.get('post_blend_noise'):
+            new_pixels.array[:] = original_pixels
+
+        kc = dbfd.KColorGalaxy.KColorGalaxy(bfd_config, [kgal], nda=kgal.getNda())
+        world = ref_wcs.toWorld(galsim.PositionD(x_peak, y_peak))
+        dx, badcentering, msg = kc.recenter(2)
+
+        outRecord = cat.addNew()
+        if badcentering:
+            outRecord.set(keys['flagKey'], 1)
+            replacers[band].removeSource(src.getId())
+            continue
+
+        mom, cov = kc.get_moment(dx[0], dx[1], True)
+
+        mom_even = mom.m
+        mom_odd = mom.xy
+        cov_even, cov_odd = compress_cov(cov)
+
+        # compute final position
+        final_world = galsim.CelestialCoord(world.ra + dx[0]*galsim.arcsec,
+                                            world.dec + dx[1]*galsim.arcsec)
+        final_xy = ref_wcs.toImage(final_world)
+
+        if src.getParent() == 0:
+            outRecord.set(keys['nblend'], 1)
+        else:
+            outRecord.set(keys['nblend'], parent_dict[src.getParent()])
+        outRecord.setParent(src.getParent())
+        outRecord.set(keys['evenKey'], np.array(mom_even, dtype=np.float32))
+        outRecord.set(keys['oddKey'], np.array(mom_odd, dtype=np.float32))
+        outRecord.set(keys['cov_evenKey'], np.array(cov_even, dtype=np.float32))
+        outRecord.set(keys['cov_oddKey'], np.array(cov_odd, dtype=np.float32))
+        outRecord.set(keys['shiftKey'], np.array(
+            [dx[0], dx[1]], dtype=np.float32))
+        outRecord.set(keys['xKey'], final_xy.x)
+        outRecord.set(keys['yKey'], final_xy.y)
+        outRecord.set('coord_ra', world.ra.rad*geom.radians)
+        outRecord.set('coord_dec', world.dec.rad*geom.radians)
+
+        replacers[band].removeSource(src.getId())
 
     replacers[band].end()
 
     return sim, result, cat, exps[band]
 
 
-def generate_blend_prior_scarlet_nn(args: dict):
+def generate_blend_prior_scarlet(args: dict):
     """Generate prior catalog"""
     bfd_config = dbfd.BFDConfig(use_mag=args['use_mag'], use_conc=args['use_conc'],
                                 ncolors=args['ncolors'])
@@ -255,7 +238,6 @@ def generate_blend_prior_scarlet_nn(args: dict):
     cat = afwTable.SourceCatalog(bfd_schema)
 
     rng = np.random.RandomState(args['seed'])
-
     sim = Sim(rng=rng, **args['sim'])
     result = sim.gen_sim()
 
@@ -332,7 +314,6 @@ def generate_blend_prior_scarlet_nn(args: dict):
         filters += band
         images[band] = result[band][0]
         exps[band] = convert_to_dm(images[band])
-
         noise_sigma[band] = np.sqrt(1./result[band][0].weight[0, 0])
         orig_noise_sigma[band] = np.sqrt(1./result[band][0].weight[0, 0])
 
@@ -354,7 +335,6 @@ def generate_blend_prior_scarlet_nn(args: dict):
     for iband in filters:
         if args.get('prior_pre_det_noise'):
             exps[iband].image.array[:] = original_pixels[iband]
-        #exps[iband].writeFits(f'pi_{iband}.fits')
     
     if args.get('add_prior_noise_det'):
 
@@ -399,13 +379,11 @@ def generate_blend_prior_scarlet_nn(args: dict):
 
     # Run on deblended images
     noise_replacer_config = NoiseReplacerConfig()
-    full_exp = afwImage.ExposureF(exps[band], True)
     footprints = {record.getId(): (record.getParent(), record.getFootprint())
                   for record in sources[band]}
-    noise_exp = afwImage.ExposureF(exps[band], True)
 
     # This constructor will replace all detected pixels with noise in the image
-    replacers[band] = NoiseReplacer(noise_replacer_config, exposure=exps[band],
+    replacer = NoiseReplacer(noise_replacer_config, exposure=exp,
                              footprints=footprints)
 
     gals = sim._object_data
@@ -413,79 +391,56 @@ def generate_blend_prior_scarlet_nn(args: dict):
     ref_wcs = result[band][0].wcs
     atemplates = []
     ngals = 0
+    for src in sources[band]:
+        meas_task.callMeasure(src, exp)
 
-    parent_cat = sources[band].getChildren(0)
-
-    for parent in parent_cat:
-
-        child_cat = sources[band].getChildren(parent.getId())
-
-        for src in child_cat:
-
-            replacers[band].insertSource(src.getId())
-            meas_task.callMeasure(src, exps[band])
-            replacers[band].removeSource(src.getId())
- 
-
-            peak = src.getFootprint().getPeaks()[0]
-            x_peak, y_peak = peak.getIx() - 0.5, peak.getIy() - 0.5
-
-            if args.get('use_footprint'):
-                bbox = src.getFootprint().getBBox()
-            else:
-                bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
-                bbox.grow(args['stamp_size'] // 2)
-                bbox.clip(exp.getBBox())
-
-            image = afwImage.ExposureF(noise_exp[bbox], True)
-            footprint_bbox = parent.getFootprint().getBBox()
-            footprint_bbox.clip(bbox)
-            image[footprint_bbox].image.array[:] = full_exp[footprint_bbox].image.array
-
-            nbr_image = afwImage.ExposureF(full_exp[bbox], True)
-            nbr_image.image.array[:, :] = 0
-
-
-            for neigh in child_cat:
-                if neigh == src:
-                    continue
-                replacers[band].insertSource(neigh.getId())
-                nbr_image.image[footprint_bbox] += exps[band].image[footprint_bbox]
-                replacers[band].removeSource(neigh.getId())
-
-
-            image.image[bbox].array[:] -= nbr_image.image[bbox].array
-
-            sky = exp.getWcs().pixelToSky(geom.Point2D(x_peak, y_peak))
-            uv_pos = (sky.getRa().asArcseconds(), sky.getDec().asArcseconds())
-            xy_pos = (x_peak, y_peak)
-            try:
-                kgal = buildKGalaxyDM(image, xy_pos, bbox, uv_pos, bfd_config, noise_sigma, weight, _id=src.getId())
-            except:
-                print('Failed to build gal')
+        if src.get('deblend_nChild') != 0:
                 continue
 
-            kc = dbfd.KColorGalaxy.KColorGalaxy(bfd_config, [kgal], nda=kgal.getNda())
-            world = ref_wcs.toWorld(galsim.PositionD(x_peak, y_peak))
-            dx, badcentering, msg = kc.recenter(2)
+        replacer.insertSource(src.getId())
 
-            if badcentering:
-                continue
+        peak = src.getFootprint().getPeaks()[0]
+        x_peak, y_peak = peak.getIx() - 0.5, peak.getIy() - 0.5
+
+        if args.get('use_footprint'):
+            bbox = src.getFootprint().getBBox()
+        else:
+            bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
+            bbox.grow(args['stamp_size'] // 2)
+            bbox.clip(exp.getBBox())
+
+        sky = exp.getWcs().pixelToSky(geom.Point2D(x_peak, y_peak))
+        uv_pos = (sky.getRa().asArcseconds(), sky.getDec().asArcseconds())
+        xy_pos = (x_peak, y_peak)
+        try:
+            kgal = buildKGalaxyDM(exp, xy_pos, bbox, uv_pos, bfd_config, noise_sigma, weight, _id=src.getId())
+        except:
+            replacer.removeSource(src.getId())
+            print('Failed to build gal')
+            continue
+
+        kc = dbfd.KColorGalaxy.KColorGalaxy(bfd_config, [kgal], nda=kgal.getNda())
+        world = ref_wcs.toWorld(galsim.PositionD(x_peak, y_peak))
+        dx, badcentering, msg = kc.recenter(2)
+
+        if badcentering:
+            replacer.removeSource(src.getId())
+            continue
 
 
-            mom, cov = kc.get_moment(dx[0], dx[1], True)
+        mom, cov = kc.get_moment(dx[0], dx[1], True)
 
-            ltemplates = make_templates(rng, kc, sigma_xy, sn_min=minFlux/sigma_flux,
-                                        sigma_flux=sigma_flux, sigma_step=priorSigmaStep,
-                                        sigma_max=priorSigmaCutoff, xy_max=2, tid=src.getId(),  # fixme
-                                        weight_sigma=args['weight_sigma'])
-            atemplates.extend(ltemplates)
+        ltemplates = make_templates(rng, kc, sigma_xy, sn_min=minFlux/sigma_flux,
+                                    sigma_flux=sigma_flux, sigma_step=priorSigmaStep,
+                                    sigma_max=priorSigmaCutoff, xy_max=2, tid=src.getId(),  # fixme
+                                    weight_sigma=args['weight_sigma'])
+        atemplates.extend(ltemplates)
 
-            if len(ltemplates) > 0:
-                ngals += 1
+        if len(ltemplates) > 0:
+            ngals += 1
 
-    
-    replacers[band].end()
+        replacer.removeSource(src.getId())
+    replacer.end()
 
     for temp in atemplates:
         momentPrior.addTemplate(temp)

@@ -89,14 +89,27 @@ def generate_grid_catalog_scarlet_nn(args: dict):
                                 ncolors=args['ncolors'])
     weight = dbfd.KSigmaWeightF(args['weight_sigma'], args['weight_n'])
 
+    var_shear = True
+    g1_max = args.get('g1_max', None)
+    g1 = None
+    g2 = None
+    if g1_max is None:
+        var_shear = False
+    
     keys, bfd_schema = define_cat_schema(bfd_config)
     keys['gal'] = bfd_schema.addField('gal', type=np.int32, doc="Which galaxy")
     keys['nblend'] = bfd_schema.addField('nblend', type=np.int32, doc="number of objects in blend")
     keys['true_x'] = bfd_schema.addField('true_x', type=float, doc="true x")
     keys['true_y'] = bfd_schema.addField('true_y', type=float, doc="true y")
+    if var_shear:
+        keys['g1Key'] = bfd_schema.addField('g1', type=float, doc="true g1")
+        keys['g2Key'] = bfd_schema.addField('g2', type=float, doc="true g2")
     cat = afwTable.SourceCatalog(bfd_schema)
     rng = galsim.UniformDeviate(args['seed'])
     np.random.seed(args['seed'])
+    rng1 = np.random.default_rng(args['seed'])
+    rng2 = np.random.default_rng(args['seed']+1)
+    rng3 = np.random.default_rng(args['seed']+2)
 
 
     e_sample = BobsEDist(args['sigma_e'], rng)
@@ -158,30 +171,46 @@ def generate_grid_catalog_scarlet_nn(args: dict):
         xx = []
         yy = []
 
-        mag = np.random.uniform(args['mag_min'], args['mag_max'])
+        mag = rng1.uniform(args['mag_min'], args['mag_max'])
         flux = 10**(0.4 * (30 - mag))
-        hlr = np.random.uniform(args['hlr_min'], args['hlr_max'])
+        hlr = rng1.uniform(args['hlr_min'], args['hlr_max'])
         print('Flux: ', flux)
-
+        
+        
         pos = []
-# 
+
         for iigal in range(n_gal):
             print('processing galaxy', iigal)
             ised = sed_list[iigal]
-
+            radial_pair = args.get('radial_pair', False)
             while True:
+                if radial_pair is False:
+                    x = rng1.uniform(args['border'], image_size-args['border'])
+                    y = rng1.uniform(args['border'], image_size-args['border'])
+                    if iigal == 0:
+                        pos.append((x,y))
+                        break
 
-                x = np.random.uniform(args['border'], image_size-args['border'])
-                y = np.random.uniform(args['border'], image_size-args['border'])
-                if iigal == 0:
-                    pos.append((x,y))
-                    break
+                    dist = np.array([np.sqrt((a[0]-x)**2 + (a[1]-y)**2) for a in pos])
 
-                dist = np.array([np.sqrt((a[0]-x)**2 + (a[1]-y)**2) for a in pos])
-
-                if np.min(dist) > args['min_pix'] and np.max(dist) < args['max_pix']:
-                    pos.append((x,y))
-                    break
+                    if np.min(dist) > args['min_pix'] and np.max(dist) < args['max_pix']:
+                        pos.append((x,y))
+                        break
+                else:
+                    if iigal == 0:
+                        x = rng1.uniform(-1,1) + image_size/2
+                        y = rng1.uniform(-1,1) + image_size/2
+                        pos.append((x,y))
+                        break
+                    else:
+                        x = rng1.uniform(args['border'], image_size-args['border'])
+                        y = rng1.uniform(args['border'], image_size-args['border'])
+                        dist = np.array([np.sqrt((a[0]-x)**2 + (a[1]-y)**2) for a in pos])
+                        if np.min(dist) > args['min_pix'] and np.max(dist) < args['max_pix']:
+                            pos.append((x,y))
+                            break
+                    
+                    
 
             xx.append(x)
             yy.append(y)
@@ -189,7 +218,17 @@ def generate_grid_catalog_scarlet_nn(args: dict):
             sed = ised.withFlux(flux, filters[filter_norm])
             disk = galsim.Exponential(half_light_radius=hlr)
             mgal = disk*sed
-            mgal = mgal.shear(g1=args['g1'], g2=args['g2'])
+            if var_shear is False:
+                g1 = args['g1']
+                g2 = args['g2']
+            else:
+                g1_min = args['g1_min']
+                g2_min = args['g2_min']
+                g2_max = args['g2_max']
+                g1 = rng1.uniform(g1_min, g1_max)
+                g2 = rng1.uniform(g2_min, g2_max)
+                
+            mgal = mgal.shear(g1=g1, g2=g2)
             cgal = galsim.Convolve([mgal, psf])
 
             for iim in range(nimages):
@@ -211,10 +250,12 @@ def generate_grid_catalog_scarlet_nn(args: dict):
             exposures.append(exp)
             #exp.writeFits(f'exp1_{filters_all[i]}.fits')
 
+
         texposures=[]
 
         for i,timage in enumerate(timages):
-            texp = convert_dm(timage, args['noise_sigma'], args['scale'], psf_image)
+            ###texp = convert_dm(timage, args['noise_sigma'], args['scale'], psf_image)
+            texp = convert_dm(timage, 0, args['scale'], psf_image)
             texposures.append(texp)
 
         schema = afwTable.SourceTable.makeMinimalSchema()
@@ -249,6 +290,12 @@ def generate_grid_catalog_scarlet_nn(args: dict):
         deblend_config = SourceDeblendConfig()
         #deblend_task = SourceDeblendTask(config=deblend_config, schema=schema)
         print('Simulate ',len(exposures))
+
+        if args.get('pre_det_noise'):
+            for exp in exposures:
+                exp.image.array[:] += rng2.normal(size=exp.image.array.shape)*args['pre_det_noise']
+                noise_sigma = np.sqrt(args['noise_sigma']**2 + args['pre_det_noise']**2)
+                exp.variance.array[:] = noise_sigma**2
         exposure = afwImage.MultibandExposure.fromExposures(filters_all, exposures)
 
         mdeblend_config = ScarletDeblendConfig()
@@ -269,17 +316,74 @@ def generate_grid_catalog_scarlet_nn(args: dict):
         # Detect objects
         table = afwTable.SourceTable.make(schema)
         det_result = detection_task.run(table, exposure[filter_norm])
-
+        
         if args.get('write_dimage'):
             exposure[filter_norm].writeFits(f"{args['outdir']}/dim{igal}_{filters_all[0]}.fits")
 
         for src in det_result.sources:
             src.getFootprint()
+        
+        if args.get('post_det_noise'):
+            for exp in exposures:
+                exp.image.array[:] += rng2.normal(size=exp.image.array.shape)*args['post_det_noise']
+                noise_sigma = np.sqrt(args['noise_sigma']**2 + args['post_det_noise']**2)
+                exp.variance.array[:] = noise_sigma**2
+            exposure = afwImage.MultibandExposure.fromExposures(filters_all, exposures)
+
+        # This will remove detections that are not found in the noiser version
+        # of the images
+        if args.get('replace_footprints'):
+            if args.get('post_det_noise'):
+                foot_image = exposure[filter_norm]
+            elif args.get('post_blend_noise'):
+                foot_image = afwImage.ExposureF(exposure[filter_norm], True)
+                foot_image.image.array[:] += rng2.normal(size=exp.image.array.shape)*args['post_blend_noise']
+                noise_sigma = np.sqrt(args['noise_sigma']**2 + args['post_blend_noise']**2)
+                foot_image.variance.array[:] = noise_sigma**2
+
+            det_result_noise = detection_task.run(table, foot_image)
+            det_sources = afwTable.SourceCatalog(det_result.sources.table)
+
+            for src in det_result.sources:
+                # need to find a match to src in the noise detections
+                cen = src.getFootprint().getSpans().computeCentroid()
+                min_dist = 1e10
+                close_src = None
+                for nsrc in det_result_noise.sources:
+                    test_cen = nsrc.getFootprint().getSpans().computeCentroid()
+                    dist = np.sqrt((cen.x-test_cen.x)**2 + (cen.y-test_cen.y)**2 )
+
+                    if dist < min_dist:
+                        min_dist = dist
+                        close_src = nsrc
+                if min_dist > 5:
+                    # can't match any sources
+                    continue
+                # do we need to remove any peaks from the noise detections?
+                #keep_peaks=[]
+                # for npeak in close_src.getFootprint().getPeaks():
+                #     min_dist=1e10
+                #     match_peak = False
+                #     for peak in src.getFootprint().getPeaks():
+                #         peak_dist = np.sqrt((npeak['i_x']-peak['i_x'])**2+(npeak['i_y']-peak['i_y'])**2)
+                #         if peak_dist<5:
+                #             match_peak = True
+                #     keep_peaks.append(npeak)
+                peak_schema = close_src.getFootprint().getPeaks().schema
+                foot = afwDet.Footprint(close_src.getFootprint().getSpans(), peak_schema)
+
+                # Do I need to make sure the peaks are in the new footprint??
+                for peak in src.getFootprint().getPeaks():
+                    foot.addPeak(peak['i_x'], peak['i_y'], peak['peakValue'])
+                new_src = det_sources.addNew()
+                new_src.setFootprint(foot)
+        else:
+            det_sources = det_result.sources
 
         try:
-            result = mdeblend_task.run(exposure, det_result.sources)
+            result = mdeblend_task.run(exposure, det_sources)
         except Exception as e:
-            print('problem with deblend:',e)
+            print('problem with deblend:', e)
             continue
 
         if args.get('old_scarlet'):
@@ -293,7 +397,7 @@ def generate_grid_catalog_scarlet_nn(args: dict):
 
         exp = exposures[0]
         full_exp = afwImage.ExposureF(exp, True)
-        
+
         # This constructor will replace all detected pixels with noise in the image
         replacer = NoiseReplacer(noise_replacer_config, exposure=exp,
                                  footprints=footprints)
@@ -306,11 +410,15 @@ def generate_grid_catalog_scarlet_nn(args: dict):
 
         measParentCat = sources.getChildren(0)
         cur_index = 0
+        
         for parentIdx, measParentRecord in enumerate(measParentCat):
             measChildCat = sources.getChildren(measParentRecord.getId())
-            
+            if len(measChildCat) == 0:
+                measChildCat = measParentCat
+            print('area',measParentRecord.getFootprint().getArea())
             for child in measChildCat:
                 peak = child.getFootprint().getPeaks()[0]
+
                 x_peak, y_peak = peak.getIx() - 0.5, peak.getIy() - 0.5
                 bbox = geom.Box2I(geom.Point2I(x_peak, y_peak), geom.Extent2I(1, 1))
                 bbox.grow(args['stamp_size'] // 2)
@@ -328,19 +436,19 @@ def generate_grid_catalog_scarlet_nn(args: dict):
                 true_y = pos[index][1]
 
                 use_truth_nn = args.get("use_truth_nn")
+                skip_deblend = args.get("skip_deblend", False)
                 if use_truth_nn is None:
                     for neigh in measChildCat:
+                        if skip_deblend:
+                            continue
                         if neigh == child:
                             continue
                         replacer.insertSource(neigh.getId())
                         nbr_image.image[bbox] += exp.image[bbox]
                         replacer.removeSource(neigh.getId())
 
-
-                    image.image[bbox].array[:] -= nbr_image.image[bbox].array
-
-                    if args.get('write_images'):
-                        image.writeFits(f"{args['outdir']}/im_{igal}_{cur_index}.fits")
+                    diff_mask = nbr_image.image[bbox].array!= image.image[bbox].array
+                    image.image[bbox].array[diff_mask] -= nbr_image.image[bbox].array[diff_mask]
                 else:
                     truth = afwImage.ExposureF(full_exp[bbox], True)
                     truth.image.array[:] = 0
@@ -351,13 +459,24 @@ def generate_grid_catalog_scarlet_nn(args: dict):
 
 
                     image.image.array[:] -= truth.image[bbox].array
-                    if args.get('write_images'):
-                        image.writeFits(f"{args['outdir']}/im_{igal}_{cur_index}.fits")
+
 
                 cur_index += 1
                 sky = exp.getWcs().pixelToSky(geom.Point2D(x_peak, y_peak))
                 uv_pos = (sky.getRa().asArcseconds(), sky.getDec().asArcseconds())
                 xy_pos = (x_peak, y_peak)
+
+
+                if args.get('post_blend_noise'):
+                    image.image.array[:] += rng3.normal(size=image.image[bbox].array.shape)*args['post_blend_noise']
+                    noise_sigma = np.sqrt(args['noise_sigma']**2 + args['post_blend_noise']**2)
+                    image.variance.array[:] = noise_sigma**2
+
+                if args.get('write_images'):
+                    image.writeFits(f"{args['outdir']}/im_{igal}_{cur_index}.fits")
+
+                    if use_truth_nn is None:
+                        nbr_image.writeFits(f"{args['outdir']}/nbr_im_{igal}_{cur_index}.fits")
 
                 try:
                     kgal = buildKGalaxyDM(image, xy_pos, image.getBBox(), uv_pos, bfd_config, noise_sigma, weight, _id=child.getId())
@@ -396,6 +515,9 @@ def generate_grid_catalog_scarlet_nn(args: dict):
                     [dx[0], dx[1]], dtype=np.float32))
                 outRecord.set(keys['xKey'], x_peak+dx[0])
                 outRecord.set(keys['yKey'], y_peak+dx[1])
+                if var_shear:
+                    outRecord.set(keys['g1Key'], g1)
+                    outRecord.set(keys['g2Key'], g2)
 
         replacer.end()     
     return cat
@@ -543,7 +665,17 @@ def generate_grid_prior_scarlet_nn(args: dict):
             sed = ised.withFlux(flux, filters[filter_norm])
             disk = galsim.Exponential(half_light_radius=hlr)
             mgal = disk*sed
-            mgal = mgal.shear(g1=args['g1'], g2=args['g2'])
+            g1_max = args.get('g1_max', None)
+            if g1_max is None:
+                g1 = args['g1']
+                g2 = args['g2']
+            else:
+                g1_min = args['g1_max']
+                g2_min = args['g2_min']
+                g2_max = args['g2_max']
+                g1 = np.random.uniform(g1_min, g1_max)
+                g2 = np.random.uniform(g2_min, g2_max)
+            mgal = mgal.shear(g1=g1, g2=g2)
             cgal = galsim.Convolve([mgal, psf])
 
             for iim in range(nimages):
@@ -675,8 +807,11 @@ def generate_grid_prior_scarlet_nn(args: dict):
                 true_y = pos[index][1]
 
                 use_truth_nn = args.get("use_truth_nn")
+                skip_deblend = args.get("skip_deblend", False)
                 if use_truth_nn is None:
                     for neigh in measChildCat:
+                        if skip_deblend:
+                            continue
                         if neigh == child:
                             continue
                         replacer.insertSource(neigh.getId())

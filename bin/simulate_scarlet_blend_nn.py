@@ -122,6 +122,9 @@ if data['run_prior']:
         sims_dict['g1'] = 0.0
         sims_dict['g2'] = 0.0
         sims_dict['noise_per_band'] = prior_args['template_noise_sigma']
+
+        if prior_args.get('template_noise_factor'):
+            sims_dict['gals_kws']['noise_factor'] = prior_args['template_noise_factor']
         prior_args['sim'] = sims_dict
         prior_args['write_prior_file'] = f"{prior_args['outdir']}/{prior_args['priorfile']}_{prior_args['index']}.fits"
         prior_list_args.append(prior_args)
@@ -146,7 +149,7 @@ for i in range(data['njobs']):
     local_args = copy.deepcopy(data)
     local_args['index'] = i + data['index'] + start_index
     local_args['seed'] = seed_init + local_args['index']
-
+    # testing 
     spacing = local_args['stamp_size']
     sims_dict = local_args['sims_dict']
     sims_dict['noise_per_band'] = local_args['noise_sigma']
